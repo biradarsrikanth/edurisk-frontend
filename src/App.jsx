@@ -82,51 +82,36 @@ async function callHFSpace(spaceUrl, features) {
 
 // ── Call Mistral-7B via HF Inference API ─────────────────────────────────────
 async function callMistral(token, student, pred) {
-  const riskFactorText = pred.riskFactors?.filter(f=>f.raw !== undefined)
-    .map(f => `${FEAT_LABELS[f.feature] || f.feature} (${f.raw})`).join(", ")
-    || "low attendance and grades";
-
-  const prompt = `<s>[INST] You are an empathetic academic advisor at a university. A machine learning model has flagged a student as at-risk of dropping out.
-
-Student profile:
-- Semester 1 Grade: ${student.sem1_grade}/20, Semester 2 Grade: ${student.sem2_grade}/20
-- Previous qualification grade: ${student.prev_grade}/20
-- Attendance: ${student.attendance}%, LMS logins: ${student.logins}/month
-- Assignments submitted: ${student.assignments_done}/10, Units approved: ${student.sem1_approved}/6
-- Scholarship: ${student.scholarship ? "Yes" : "No"}, Tuition paid: ${student.tuition ? "Yes" : "No"}
-- Has debt: ${student.debtor ? "Yes" : "No"}, Parent education level: ${student.parent_edu}/5
-
-Risk assessment: ${Math.round(pred.dropout * 100)}% dropout probability — ${pred.risk_level} RISK
-Key concern areas: ${riskFactorText}
-
-Write a warm, empathetic advisor message (3–4 sentences) that:
-1. Acknowledges their specific struggles without being judgmental
-2. Suggests one concrete action to take this week
-3. Mentions one available support resource
-Keep it human, not clinical. [/INST]`;
-
-  const res = await fetch(
-    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
-    {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: { max_new_tokens: 200, temperature: 0.75, top_p: 0.9,
-                       do_sample: true, return_full_text: false }
-      }),
-    }
-  );
+  // Call our FastAPI /nudge endpoint (proxies Mistral server-side — fixes CORS)
+  const base = (import.meta.env.VITE_HF_SPACE_URL || "https://srikanth-haki-mini-project.hf.space").replace(/\/$/, "");
+  const res = await fetch(`${base}/nudge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      hf_token:        token,
+      risk_level:      pred.risk_level || pred.riskLevel || "MODERATE",
+      dropout_pct:     pred.dropout_pct || `${Math.round((pred.dropout||0.5)*100)}%`,
+      sem1_grade:      student.sem1_grade,
+      sem2_grade:      student.sem2_grade,
+      attendance:      student.attendance,
+      logins:          student.logins,
+      assignments_done:student.assignments_done,
+      scholarship:     student.scholarship,
+      tuition:         student.tuition,
+      debtor:          student.debtor,
+      parent_edu:      student.parent_edu,
+    }),
+  });
   if (!res.ok) {
-    const status = res.status;
-    if (status === 503) throw new Error("Model is loading (cold start ~20s). Please retry.");
-    if (status === 401) throw new Error("Invalid HF token. Check huggingface.co/settings/tokens");
-    if (status === 429) throw new Error("Rate limit reached. Wait a moment and retry.");
-    throw new Error(`HF API error ${status}`);
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    const msg = err.detail || JSON.stringify(err);
+    if (res.status === 503) throw new Error("Model loading (cold start). Wait 20s and retry.");
+    if (res.status === 401) throw new Error("Invalid HF token. Check huggingface.co/settings/tokens");
+    if (res.status === 429) throw new Error("Rate limit hit. Wait a moment and retry.");
+    throw new Error(msg);
   }
   const data = await res.json();
-  const raw = Array.isArray(data) ? (data[0]?.generated_text ?? "") : (data?.generated_text ?? JSON.stringify(data));
-  return raw.trim();
+  return data.message || "No message generated.";
 }
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -782,13 +767,13 @@ export default function App() {
                   step:"02", title:"Deploy Frontend → Vercel", color:"#7c3aed",
                   time:"~5 mins", cost:"Free",
                   instructions:[
-                    "Push the frontend/ folder to a GitHub repo",
-                    "Go to vercel.com → New Project → Import your repo",
+                    "Repo already on GitHub: github.com/biradarsrikanth/edurisk-frontend",
+                    "Go to vercel.com → New Project → Import biradarsrikanth/edurisk-frontend",
                     "In Vercel Environment Variables, add:",
                     "  VITE_HF_SPACE_URL = https://srikanth-haki-mini-project.hf.space",
                     "  VITE_HF_TOKEN     = hf_xxxx  (optional — users can enter their own)",
                     "Click Deploy. Done. URL: https://edurisk.vercel.app",
-                    "Every git push auto-redeploys via CI/CD",
+                    "Every git push to main auto-redeploys via Vercel CI/CD",
                   ],
                   note:"Alternatively use Netlify: drag-and-drop the dist/ folder after running npm run build",
                 },
