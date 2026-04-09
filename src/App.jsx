@@ -14,6 +14,9 @@ const fontLink = document.createElement("link");
 fontLink.rel = "stylesheet";
 fontLink.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap";
 document.head.appendChild(fontLink);
+const spinStyle = document.createElement("style");
+spinStyle.textContent = `@keyframes spin{to{transform:rotate(360deg)}}`;
+document.head.appendChild(spinStyle);
 
 // ── Local fallback predictor ──────────────────────────────────────────────────
 // Calibrated weights match UCI dropout dataset model performance
@@ -127,10 +130,10 @@ async function apiPredict(f){
   return{...d,riskFactors:loc.riskFactors,strengths:loc.strengths,allFeatures:loc.allFeatures,
     confidence:loc.confidence,margin:loc.margin,recommendations:loc.recommendations,topIssue:loc.topIssue};
 }
-async function apiNudge(tok,student,pred){
+async function apiNudge(student,pred){
   const r=await fetch(`${HF_SPACE}/nudge`,{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({hf_token:tok,risk_level:pred.risk_level,
+    body:JSON.stringify({risk_level:pred.risk_level,
       dropout_pct:pred.dropout_pct||`${Math.round(pred.dropout*100)}%`,
       sem1_grade:student.sem1_grade,sem2_grade:student.sem2_grade,
       attendance:student.attendance,logins:student.logins,
@@ -486,11 +489,9 @@ export default function App(){
   const [result,setResult]=useState(null);
   const [predicting,setPredicting]=useState(false);
   const [predErr,setPredErr]=useState("");
-  const [hfTok,setHfTok]=useState("");
   const [nudge,setNudge]=useState("");
   const [nudgeLoading,setNudgeLoading]=useState(false);
   const [nudgeErr,setNudgeErr]=useState("");
-  const [showTok,setShowTok]=useState(false);
 
   const [students,setStudents]=useState([]);
   const [preds,setPreds]=useState([]);
@@ -554,15 +555,20 @@ export default function App(){
 
   async function runPredict(){
     setPredicting(true);setPredErr("");setNudge("");setNudgeErr("");
-    try{setResult(await apiPredict(form).catch(()=>localPred(form)));}
+    try{
+      const res=await apiPredict(form).catch(()=>localPred(form));
+      setResult(res);
+      // Auto-generate AI nudge after prediction
+      setNudgeLoading(true);
+      apiNudge(form,res).then(msg=>setNudge(msg)).catch(e=>setNudgeErr(e.message)).finally(()=>setNudgeLoading(false));
+    }
     catch(e){setPredErr(e.message);}
     finally{setPredicting(false);}
   }
 
   async function runNudge(){
-    if(!hfTok.trim()){setNudgeErr("Enter your HuggingFace token first.");return;}
     setNudgeLoading(true);setNudge("");setNudgeErr("");
-    try{setNudge(await apiNudge(hfTok,form,result));}
+    try{setNudge(await apiNudge(form,result));}
     catch(e){setNudgeErr(e.message);}
     finally{setNudgeLoading(false);}
   }
@@ -924,27 +930,60 @@ export default function App(){
 
                 {/* Nudge */}
                 <div style={{...card,border:`1px solid rgba(37,99,235,.18)`}}>
-                  <div style={{fontWeight:700,fontSize:11,color:C.accent,letterSpacing:"1.2px",marginBottom:12}}>
-                    🤖 AI ADVISOR NUDGE — QWEN3-8B
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                    <div style={{fontWeight:700,fontSize:11,color:C.accent,letterSpacing:"1.2px"}}>
+                      🤖 AI ADVISOR NUDGE — QWEN3-8B
+                    </div>
+                    {nudge&&!nudgeLoading&&(
+                      <button onClick={runNudge} style={{
+                        padding:"4px 10px",borderRadius:7,border:`1px solid rgba(37,99,235,.2)`,
+                        background:"transparent",color:C.accent,fontSize:10,fontWeight:700,
+                        cursor:"pointer",fontFamily:"inherit"
+                      }}>↺ Regenerate</button>
+                    )}
                   </div>
-                  <div style={{display:"flex",gap:8,marginBottom:10}}>
-                    <input type={showTok?"text":"password"} placeholder="Paste HuggingFace token (hf_xxx...)"
-                      value={hfTok} onChange={e=>setHfTok(e.target.value)} style={inp}/>
-                    <button onClick={()=>setShowTok(p=>!p)} style={{
-                      padding:"0 11px",background:C.surface2,border:`1px solid ${C.border}`,
-                      borderRadius:8,cursor:"pointer",color:C.text2,fontSize:13}}>{showTok?"🙈":"👁"}</button>
+                  {nudgeLoading&&(
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"14px",
+                      background:"rgba(37,99,235,.04)",border:`1px solid rgba(37,99,235,.1)`,
+                      borderRadius:10}}>
+                      <div style={{width:16,height:16,border:"2px solid rgba(37,99,235,.2)",
+                        borderTopColor:C.accent,borderRadius:"50%",
+                        animation:"spin 0.8s linear infinite",flexShrink:0}}/>
+                      <span style={{fontSize:12,color:C.text2}}>Qwen3-8B is drafting a personalised message…</span>
+                    </div>
+                  )}
+                  {nudgeErr&&!nudgeLoading&&(
+                    <div style={{marginBottom:8,fontSize:11,color:"#dc2626",
+                      background:"rgba(239,68,68,.05)",padding:"10px 12px",borderRadius:8,
+                      display:"flex",alignItems:"flex-start",gap:8}}>
+                      <span>⚠</span>
+                      <div>
+                        <div style={{fontWeight:700,marginBottom:2}}>AI nudge unavailable</div>
+                        <div style={{opacity:.8}}>{nudgeErr}</div>
+                        <button onClick={runNudge} style={{marginTop:6,padding:"4px 10px",borderRadius:6,
+                          border:`1px solid rgba(239,68,68,.3)`,background:"transparent",color:"#dc2626",
+                          fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Try again</button>
+                      </div>
+                    </div>
+                  )}
+                  {nudge&&!nudgeLoading&&(
+                    <div style={{padding:14,background:"rgba(37,99,235,.04)",
+                      border:`1px solid rgba(37,99,235,.12)`,borderRadius:10}}>
+                      <div style={{fontSize:9,color:C.accent,fontWeight:700,letterSpacing:"1.5px",marginBottom:8}}>
+                        GENERATED MESSAGE ✓
+                      </div>
+                      <div style={{fontSize:13,color:C.text,lineHeight:1.85,fontStyle:"italic"}}>{nudge}</div>
+                    </div>
+                  )}
+                  {!nudge&&!nudgeLoading&&!nudgeErr&&(
+                    <div style={{fontSize:11,color:C.text2,textAlign:"center",padding:"10px 0"}}>
+                      Message generates automatically after prediction
+                    </div>
+                  )}
+                  <div style={{marginTop:10,fontSize:10,color:C.text2,display:"flex",alignItems:"center",gap:5}}>
+                    <span style={{width:5,height:5,borderRadius:"50%",background:"#22c55e",flexShrink:0}}/>
+                    Powered by Qwen3-8B via HuggingFace · No token required
                   </div>
-                  <button onClick={runNudge} disabled={nudgeLoading} style={{
-                    width:"100%",padding:"10px",borderRadius:9,border:`1px solid rgba(37,99,235,.2)`,
-                    background:"rgba(37,99,235,.06)",color:nudgeLoading?C.text2:C.accent,
-                    fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"
-                  }}>{nudgeLoading?"⏳ Generating...":"✨ Generate Personalised Advisor Message"}</button>
-                  {nudgeErr&&<div style={{marginTop:8,fontSize:11,color:"#dc2626",background:"rgba(239,68,68,.05)",padding:"8px 10px",borderRadius:7}}>⚠ {nudgeErr}</div>}
-                  {nudge&&<div style={{marginTop:12,padding:14,background:"rgba(37,99,235,.04)",border:`1px solid rgba(37,99,235,.12)`,borderRadius:10}}>
-                    <div style={{fontSize:9,color:C.accent,fontWeight:700,letterSpacing:"1.5px",marginBottom:8}}>GENERATED MESSAGE ✓</div>
-                    <div style={{fontSize:13,color:C.text,lineHeight:1.85,fontStyle:"italic"}}>{nudge}</div>
-                  </div>}
-                  <div style={{marginTop:8,fontSize:10,color:C.text2}}>Free token at huggingface.co/settings/tokens · Cold start ~20s</div>
                 </div>
               </>;
             })():(
